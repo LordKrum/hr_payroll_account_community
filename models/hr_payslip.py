@@ -36,10 +36,27 @@ class HrPayslip(models.Model):
                                  string='Salary Journal',
                                  required=True,
                                  help="Select Salary Journal",
-                                 default=lambda self: self.env[
-                                     'account.journal'].search(
-                                     [('type', '=', 'general')],
-                                     limit=1))
+                                 default=lambda self: self._default_journal_id())
+    
+    def _default_journal_id(self):
+        """Get default journal from contract if available, otherwise first general journal"""
+        # Try to get journal from contract in context (when creating from employee)
+        contract_id = self.env.context.get('default_contract_id')
+        if contract_id:
+            contract = self.env['hr.version'].browse(contract_id)
+            if contract.exists() and contract.journal_id:
+                return contract.journal_id.id
+        
+        # Try to get journal from employee's contract if employee is in context
+        employee_id = self.env.context.get('default_employee_id')
+        if employee_id:
+            employee = self.env['hr.employee'].browse(employee_id)
+            if employee.exists() and employee.version_id and employee.version_id.journal_id:
+                return employee.version_id.journal_id.id
+        
+        # Fallback to first general journal
+        journal = self.env['account.journal'].search([('type', '=', 'general')], limit=1)
+        return journal.id if journal else False
     move_id = fields.Many2one('account.move',
                               string='Accounting Entry',
                               readonly=True, copy=False,
@@ -63,10 +80,19 @@ class HrPayslip(models.Model):
             sets the 'journal_id' field based on the 'contract_id's journal or
             the default journal if no contract is selected."""
         super(HrPayslip, self).onchange_contract_id()
-        self.journal_id = self.contract_id.journal_id.id or (
-                not self.contract_id and
-                self.default_get(['journal_id']).get('journal_id')
-        )
+        if self.contract_id and self.contract_id.journal_id:
+            self.journal_id = self.contract_id.journal_id
+        elif not self.contract_id:
+            # If no contract, use default
+            default_journal = self._default_journal_id()
+            if default_journal:
+                self.journal_id = default_journal
+    
+    @api.onchange('date_to')
+    def _onchange_date_to(self):
+        """Set Date Account to date_to when date_to changes, if date is not already set"""
+        if self.date_to and not self.date:
+            self.date = self.date_to
 
     def action_payslip_cancel(self):
         """Cancel the payroll slip and associated accounting entries.This
@@ -98,13 +124,47 @@ class HrPayslip(models.Model):
                 'date': slip.date or slip.date_to,
             }
             for line in slip.details_by_salary_rule_category_ids:
+                # Only create accounting entries for actual salary rules (not category summaries)
+                # and only if the rule has accounts configured
+                if not line.salary_rule_id:
+                    continue
+                # Skip if rule doesn't appear on payslip (category totals shouldn't have separate entries)
+                if not line.salary_rule_id.appears_on_payslip:
+                    continue
+                # Skip if no accounts are configured for this rule
+                if not line.salary_rule_id.account_debit_id and not line.salary_rule_id.account_credit_id:
+                    continue
+                # Forcefully exclude Basic Salary from accounting entries
+                if line.salary_rule_id.code.upper() in ('BASIC', 'BASIC_SALARY', 'BASIC_SAL') or \
+                   'basic salary' in line.salary_rule_id.name.lower():
+                    continue
+                
                 amount = slip.company_id.currency_id.round(
                     slip.credit_note and -line.total or line.total)
                 if slip.company_id.currency_id.is_zero(amount):
                     continue
                 debit_account_id = line.salary_rule_id.account_debit_id.id
                 credit_account_id = line.salary_rule_id.account_credit_id.id
+                
+                # Determine the type of transaction
+                # Check if this is a company contribution by rule_type or category code
+                is_company_contribution = False
+                if line.salary_rule_id:
+                    # Check rule_type field if it exists
+                    if hasattr(line.salary_rule_id, 'rule_type'):
+                        is_company_contribution = line.salary_rule_id.rule_type == 'company_contribution'
+                    # Fallback: check category code (company contributions often have 'COMPANY' or 'COMP' in category)
+                    if not is_company_contribution and line.category_id:
+                        category_code = line.category_id.code.upper() if line.category_id.code else ''
+                        is_company_contribution = 'COMPANY' in category_code or 'COMP' in category_code
+                
+                is_deduction = amount < 0.0
+                abs_amount = abs(amount)
+                
                 if debit_account_id:
+                    # Debit Account (typically Expense accounts):
+                    # - Always DEBIT expense account (increases expense)
+                    # - Applies to: deductions, company contributions, and other expenses
                     debit_line = (0, 0, {
                         'name': line.name,
                         'partner_id': line._get_partner_id(
@@ -112,22 +172,27 @@ class HrPayslip(models.Model):
                         'account_id': debit_account_id,
                         'journal_id': slip.journal_id.id,
                         'date': slip.date or slip.date_to,
-                        'debit': amount > 0.0 and amount or 0.0,
-                        'credit': amount < 0.0 and -amount or 0.0,
+                        'debit': abs_amount,  # Always debit expense
+                        'credit': 0.0,
                         'tax_line_id': line.salary_rule_id.account_tax_id.id,
                     })
                     line_ids.append(debit_line)
                     debit_sum += debit_line[2]['debit'] - debit_line[2][
                         'credit']
                 if credit_account_id:
+                    # Credit Account (typically Payable accounts):
+                    # - For deductions (negative): CREDIT payable (increases liability - we owe more)
+                    # - For company contributions (positive): CREDIT payable (increases liability - we owe more)
+                    # - For other additions (positive): DEBIT payable (decreases liability - we owe less)
+                    should_credit_payable = is_deduction or is_company_contribution
                     credit_line = (0, 0, {
                         'name': line.name,
                         'partner_id': line._get_partner_id(credit_account=True),
                         'account_id': credit_account_id,
                         'journal_id': slip.journal_id.id,
                         'date': slip.date or slip.date_to,
-                        'debit': amount < 0.0 and -amount or 0.0,
-                        'credit': amount > 0.0 and amount or 0.0,
+                        'debit': abs_amount if not should_credit_payable else 0.0,  # Debit payable only for non-deduction, non-contribution additions
+                        'credit': abs_amount if should_credit_payable else 0.0,  # Credit payable for deductions and company contributions
                         'tax_line_id': line.salary_rule_id.account_tax_id.id,
                     })
                     line_ids.append(credit_line)

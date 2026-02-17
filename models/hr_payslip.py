@@ -146,6 +146,13 @@ class HrPayslip(models.Model):
                 debit_account_id = line.salary_rule_id.account_debit_id.id
                 credit_account_id = line.salary_rule_id.account_credit_id.id
                 
+                # Check if this is Net Salary - it should always credit the payable account
+                # Net Salary represents what we owe the employee, so it increases liability
+                is_net_salary = (
+                    line.salary_rule_id.code.upper() in ('NET', 'NET_SALARY', 'NET_SAL') or
+                    'net salary' in line.salary_rule_id.name.lower()
+                )
+                
                 # Determine the type of transaction
                 # Check if this is a company contribution by rule_type or category code
                 is_company_contribution = False
@@ -183,16 +190,17 @@ class HrPayslip(models.Model):
                     # Credit Account (typically Payable accounts):
                     # - For deductions (negative): CREDIT payable (increases liability - we owe more)
                     # - For company contributions (positive): CREDIT payable (increases liability - we owe more)
+                    # - For Net Salary (positive): CREDIT payable (increases liability - we owe the employee)
                     # - For other additions (positive): DEBIT payable (decreases liability - we owe less)
-                    should_credit_payable = is_deduction or is_company_contribution
+                    should_credit_payable = is_deduction or is_company_contribution or is_net_salary
                     credit_line = (0, 0, {
                         'name': line.name,
                         'partner_id': line._get_partner_id(credit_account=True),
                         'account_id': credit_account_id,
                         'journal_id': slip.journal_id.id,
                         'date': slip.date or slip.date_to,
-                        'debit': abs_amount if not should_credit_payable else 0.0,  # Debit payable only for non-deduction, non-contribution additions
-                        'credit': abs_amount if should_credit_payable else 0.0,  # Credit payable for deductions and company contributions
+                        'debit': abs_amount if not should_credit_payable else 0.0,  # Debit payable only for non-deduction, non-contribution, non-net additions
+                        'credit': abs_amount if should_credit_payable else 0.0,  # Credit payable for deductions, company contributions, and net salary
                         'tax_line_id': line.salary_rule_id.account_tax_id.id,
                     })
                     line_ids.append(credit_line)

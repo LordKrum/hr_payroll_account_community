@@ -34,7 +34,18 @@ class HrPayslipRun(models.Model):
                                  string='Salary Journal',
                                  required=True, help="Journal associated with "
                                                      "the record",
-                                 default=lambda self: self.env[
-                                     'account.journal'].search(
-                                     [('type', '=', 'general')],
-                                     limit=1))
+                                 default=lambda self: self._default_journal_id())
+    
+    def _default_journal_id(self):
+        """Get default journal from settings, otherwise first general journal"""
+        # Try to get journal from settings (config parameter)
+        default_journal_id = self.env['ir.config_parameter'].sudo().get_param(
+            'hr_payroll_account_community.salary_journal_id')
+        if default_journal_id:
+            journal = self.env['account.journal'].browse(int(default_journal_id))
+            if journal.exists() and journal.type == 'general':
+                return journal.id
+        
+        # Fallback to first general journal
+        journal = self.env['account.journal'].search([('type', '=', 'general')], limit=1)
+        return journal.id if journal else False

@@ -20,9 +20,17 @@
 #    If not, see <http://www.gnu.org/licenses/>.
 #
 #############################################################################
-from . import hr_version
-from . import hr_payslip
-from . import hr_payslip_line
-from . import hr_payslip_run
-from . import hr_salary_rule
-from . import res_config_settings
+from odoo import fields, models
+
+
+class ResConfigSettings(models.TransientModel):
+    """Inherit res_config_settings model for adding payroll accounting fields"""
+    _inherit = 'res.config.settings'
+
+    salary_journal_id = fields.Many2one(
+        'account.journal',
+        string='Default Salary Journal',
+        config_parameter='hr_payroll_account_community.salary_journal_id',
+        domain=[('type', '=', 'general')],
+        help="Default journal to use for payroll accounting entries when no journal is set on the contract or payslip run"
+    )

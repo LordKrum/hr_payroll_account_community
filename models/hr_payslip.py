@@ -39,7 +39,7 @@ class HrPayslip(models.Model):
                                  default=lambda self: self._default_journal_id())
     
     def _default_journal_id(self):
-        """Get default journal from contract if available, otherwise first general journal"""
+        """Get default journal from contract if available, otherwise from settings, then first general journal"""
         # Try to get journal from contract in context (when creating from employee)
         contract_id = self.env.context.get('default_contract_id')
         if contract_id:
@@ -53,6 +53,14 @@ class HrPayslip(models.Model):
             employee = self.env['hr.employee'].browse(employee_id)
             if employee.exists() and employee.version_id and employee.version_id.journal_id:
                 return employee.version_id.journal_id.id
+        
+        # Try to get journal from settings (config parameter)
+        default_journal_id = self.env['ir.config_parameter'].sudo().get_param(
+            'hr_payroll_account_community.salary_journal_id')
+        if default_journal_id:
+            journal = self.env['account.journal'].browse(int(default_journal_id))
+            if journal.exists() and journal.type == 'general':
+                return journal.id
         
         # Fallback to first general journal
         journal = self.env['account.journal'].search([('type', '=', 'general')], limit=1)

@@ -9,8 +9,26 @@
                 <group string="Accounting">
                     <field name="analytic_account_id"
                            groups="analytic.group_analytic_accounting"/>
-                    <field name="journal_id"/>
+                    <field name="journal_id" string="Salary Journal" 
+                           domain="[('type', '=', 'general')]"
+                           invisible="not employee_id"/>
                 </group>
+            </xpath>
+        </field>
+    </record>
+    
+    <!-- Also inherit the employee form view to add journal field there -->
+    <record id="hr_version_employee_form_view_accounting" model="ir.ui.view">
+        <field name="name">hr.version.employee.form.inherit.accounting</field>
+        <field name="model">hr.version</field>
+        <field name="inherit_id" ref="hr_payroll_community.hr_version_employee_form_view"/>
+        <field name="arch" type="xml">
+            <!-- Add journal field after resource_calendar_id -->
+            <xpath expr="//field[@name='resource_calendar_id']" position="after">
+                <field name="journal_id" string="Salary Journal" 
+                       domain="[('type', '=', 'general')]"
+                       invisible="not employee_id"
+                       groups="hr.group_hr_manager"/>
             </xpath>
         </field>
     </record>

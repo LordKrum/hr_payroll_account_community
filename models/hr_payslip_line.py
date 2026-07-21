@@ -32,15 +32,13 @@ class HrPayslipLine(models.Model):
     _inherit = 'hr.payslip.line'
 
     def _get_partner_id(self, credit_account):
+        """Partner for the journal item: the rule's contribution-register
+        partner when one is configured (e.g. a statutory authority),
+        otherwise the employee's own contact so every payroll line
+        identifies the staff member it belongs to."""
         partner = self.salary_rule_id.register_id.partner_id
-
-        account = (
-            self.salary_rule_id.account_credit_id
-            if credit_account
-            else self.salary_rule_id.account_debit_id
-        )
-
-        if partner or account.account_type in ('asset_receivable', 'liability_payable'):
-            return partner.id if partner else None
-
-        return None
+        if partner:
+            return partner.id
+        employee = self.slip_id.employee_id
+        partner = employee.work_contact_id or employee.user_id.partner_id
+        return partner.id if partner else None

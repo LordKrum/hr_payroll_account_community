@@ -169,7 +169,10 @@ class HrPayslip(models.Model):
                 # deduction only ever needs its liability credit.
                 def _post(account_id, debit, credit, on_credit_side):
                     vals = (0, 0, {
-                        'name': line.name,
+                        # Prefix the employee so every journal item is
+                        # identifiable in account/ledger views.
+                        'name': '%s - %s' % (slip.employee_id.name,
+                                             line.name),
                         'partner_id': line._get_partner_id(
                             credit_account=on_credit_side),
                         'account_id': account_id,
@@ -206,8 +209,11 @@ class HrPayslip(models.Model):
                           'configured the Credit Account!') % (
                             slip.journal_id.name))
                 adjust_credit = (0, 0, {
-                    'name': _('Adjustment Entry'),
-                    'partner_id': False,
+                    'name': '%s - %s' % (slip.employee_id.name,
+                                         _('Adjustment Entry')),
+                    'partner_id': (slip.employee_id.work_contact_id
+                                   or slip.employee_id.user_id.partner_id).id
+                    or False,
                     'account_id': acc_id,
                     'journal_id': slip.journal_id.id,
                     'date': slip.date or slip.date_to,
@@ -225,8 +231,11 @@ class HrPayslip(models.Model):
                           'configured the Debit Account!') % (
                             slip.journal_id.name))
                 adjust_debit = (0, 0, {
-                    'name': _('Adjustment Entry'),
-                    'partner_id': False,
+                    'name': '%s - %s' % (slip.employee_id.name,
+                                         _('Adjustment Entry')),
+                    'partner_id': (slip.employee_id.work_contact_id
+                                   or slip.employee_id.user_id.partner_id).id
+                    or False,
                     'account_id': acc_id,
                     'journal_id': slip.journal_id.id,
                     'date': slip.date or slip.date_to,
